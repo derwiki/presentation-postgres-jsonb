@@ -38,7 +38,8 @@
       # Using Native JSON in Postgres
       ###### Adam Derewecki (derewecki@gmail.com)
       ###### Presented 2/7/2017 for Snapdocs
-      ###### github.com/derwiki/presentation-jsonb
+      ###### Source: github.com/derwiki/presentation-postgres-jsonb
+      ###### Live: is.gd/derwiki_postgres_jsonb
       ![JSON Postgres](slide-json-giuseppe.jpg)
 
       ---
@@ -86,6 +87,21 @@
       - `CREATE TABLE external_account_transfers transfer:jsonb`
       - `ALTER TABLE external_account_transfers ADD COLUMN response:jsonb`
 
+      ```
+      class AlterJsonbToJsonAndBack < ActiveRecord::Migration
+        def up
+          change_column :table, :data, 'jsonb USING CAST(payload AS jsonb)'
+        end
+
+        def down
+          change_column :table, :data, 'json USING CAST(payload AS json)'
+        end
+      end
+      ```
+
+      - warning: by default Rails serializes with `YAML` not `JSON`
+        - .. which was a dumb idea
+
       ---
 
       # `INSERT` performance
@@ -129,6 +145,28 @@
       ```
       - ~6000ms spent in Ruby, ~20x slower than serialized JSON
 
+      ---
+
+      # More Railsy
+      ```
+      # app/serializers/hash_serializer.rb
+      class HashSerializer
+        def self.dump(hash)
+          hash.to_json
+        end
+
+        def self.load(hash)
+          (hash || {}).with_indifferent_access
+        end
+      end
+
+      class NativeJson < ActiveRecord::Base
+        serialize :jsonb, HashSerializer
+        store_accessor :jsonb, :number_of_employees
+      end
+      ```
+      - `HashSerializer` provides symbolic keys
+      - `store_accessor` provides `native_json.number_of_employees`
 
       ---
 
@@ -228,13 +266,36 @@
       scope :amount_sum, ->{ self.sum("(transfer->>'amount')::int") }
       ```
 
-      Conert Unix timestamp to Postgres timestamp
+      Convert Unix timestamp to Postgres timestamp
       ```
       scope :paid_in_month, ->(year){
         self.where("DATE_PART('year',
           TIMESTAMP 'epoch' + (transfer->>'date')::int * INTERVAL '1 second') = ?", year)
       }
       ```
+
+      ---
+      # Caveats
+      - mutating any key/value in a JSON[B] field will update the entire field
+
+      ---
+      # Additional Resources
+
+      - https://www.postgresql.org/docs/9.6/static/datatype-json.html
+      - https://www.postgresql.org/docs/9.6/static/functions-json.html
+      - http://johnmosesman.com/querying-postgres-json-columns-with-activerecord
+      - http://blog.2ndquadrant.com/jsonb-type-performance-postgresql-9-4/
+      - http://nandovieira.com/using-postgresql-and-jsonb-with-ruby-on-rails
+
+      ---
+
+      class: center, middle
+      # Using Native JSON in Postgres
+      ###### Adam Derewecki (derewecki@gmail.com)
+      ###### Presented 2/7/2017 for Snapdocs
+      ###### Source: github.com/derwiki/presentation-postgres-jsonb
+      ###### Live: is.gd/derwiki_postgres_jsonb
+      ![JSON Postgres](slide-json-giuseppe.jpg)
     </textarea>
     <script src="https://remarkjs.com/downloads/remark-latest.min.js">
     </script>
