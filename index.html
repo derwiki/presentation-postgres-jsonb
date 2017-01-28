@@ -49,7 +49,8 @@
       - databases store semi-structured (XML, JSON) as a text field
         - entire field must be retrieved and parsed in application
         - field cannot be queried in database
-      - Postgres 9.4 introduces native JSON and JSONB
+      - Postgres 9.2 (2012-09-10) introduced native JSON field
+      - Postgres 9.4 (2014-12-18) introduced native JSONB field
 
       ---
 
@@ -100,7 +101,8 @@
       ```
 
       - warning: by default Rails serializes with `YAML` not `JSON`
-        - .. which was a dumb idea
+        - .. which was a dumb idea because no DB engines natively support YAML
+        - workaround: add a new JSONB column, migrate data, drop orignal column
 
       ---
 
@@ -244,10 +246,15 @@
       ---
 
       # Performance
-      - `NativeJson.group("jsonb_array_elements(jsonb->'funding_rounds')->'funded_year'").count`
-        - jsonb: 300-400ms (database), ruby: 4ms
-      - `NativeJson.group("json_array_elements(json->'funding_rounds')->>'funded_year'").count`
-        - json: 1250-1300ms (database), ruby: 4ms
+      ```ruby
+      NativeJson.group("jsonb_array_elements(jsonb->'funding_rounds')->'funded_year'").count
+      ```
+      - jsonb: 300-400ms (database), ruby: 4ms
+
+      ```ruby
+      NativeJson.group("json_array_elements(json->'funding_rounds')->>'funded_year'").count
+      ```
+      - json: 1250-1300ms (database), ruby: 4ms
 
       ```ruby
       NativeJson.select(:text).map do |r|
@@ -256,21 +263,28 @@
         end
       end.compact.flatten.inject(Hash.new(0)) { |h, x| h[x] += 1; h}
       ```
-      - text: 400ms (database), ruby: 6100ms (deserializing+looping)
+      - datbase: 400ms, ruby: 6100ms (deserializing + looping)
 
       ---
 
-      # Hide the details in `scope`
+      # Hide the details in `scope`:
       Sum across a field:
       ```ruby
       scope :amount_sum, ->{ self.sum("(transfer->>'amount')::int") }
       ```
 
-      Convert Unix timestamp to Postgres timestamp
+      Convert Unix timestamp to Postgres timestamp:
       ```ruby
       scope :paid_in_month, ->(year){
         self.where("DATE_PART('year',
           TIMESTAMP 'epoch' + (transfer->>'date')::int * INTERVAL '1 second') = ?", year)
+      }
+      ```
+
+      Existence of nested key:
+      ```ruby
+      scope :for_line_item_by_metadata, ->{
+        where("(transfer#>>'{metadata,payout_invoice_line_item_id}') IS NOT NULL")
       }
       ```
 
