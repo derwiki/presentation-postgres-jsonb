@@ -87,7 +87,7 @@
       - `CREATE TABLE external_account_transfers transfer:jsonb`
       - `ALTER TABLE external_account_transfers ADD COLUMN response:jsonb`
 
-      ```
+      ```ruby
       class AlterJsonbToJsonAndBack < ActiveRecord::Migration
         def up
           change_column :table, :data, 'jsonb USING CAST(payload AS jsonb)'
@@ -125,21 +125,21 @@
       ---
 
       # `WHERE` predicates
-      ```
+      ```ruby
       NativeJson.where("(jsonb->>'number_of_employees')::numeric > 10").count
       (297.5ms) SELECT COUNT(*) FROM "native_jsons"
       WHERE ((jsonb->>'number_of_employees')::numeric > 10)
       ```
       - use `->>` to select as `text`, and then `::numeric` to convert
 
-      ```
+      ```ruby
       NativeJson.where("(json->>'number_of_employees')::numeric > 10").count
       (1252.9ms) SELECT COUNT(*) FROM "native_jsons"
       WHERE ((json->>'number_of_employees')::numeric > 10)
       ```
       - JSON ~4x slower than JSONB
 
-      ```
+      ```ruby
       NativeJson.select(:text).each.count {|nj| nj.text['number_of_employees'].to_i > 10}
       (455.2ms)  SELECT "native_jsons"."text" FROM "native_jsons"
       ```
@@ -148,7 +148,7 @@
       ---
 
       # More Railsy
-      ```
+      ```ruby
       # app/serializers/hash_serializer.rb
       class HashSerializer
         def self.dump(hash)
@@ -171,7 +171,7 @@
       ---
 
       # `SUM` numeric hash values
-      ```
+      ```ruby
       NativeJson.sum("(jsonb->>'number_of_employees')::numeric")
       (319.3ms)  SELECT SUM((jsonb->>'number_of_employees')::numeric) FROM "native_jsons"
       ```
@@ -179,7 +179,7 @@
       - `(...)::numeric` to cast text as `numeric`
       - negligible time spent in Ruby
 
-      ```
+      ```ruby
       NativeJson.select(:text).map {|nj| nj.text['number_of_employees']}.compact.sum
       (404.3ms)  SELECT "native_jsons"."text" FROM "native_jsons"
       ```
@@ -188,7 +188,7 @@
 
       ---
       # Indexing JSONB
-      ```
+      ```ruby
       CREATE INDEX idx_native_jsons_jsonb_number_of_employee
       ON native_jsons
       USING GIN ((jsonb->'number_of_employees'));
@@ -219,12 +219,12 @@
 
       # Working with nested arrays of hashes
       Ruby:
-      ```
+      ```ruby
       NativeJson.group("jsonb_array_elements(jsonb->'funding_rounds')->'funded_year'").count
       ```
 
       SQL:
-      ```
+      ```sql
       (395.2ms)
       SELECT
         COUNT(*) AS count_all, 
@@ -249,7 +249,7 @@
       - `NativeJson.group("json_array_elements(json->'funding_rounds')->>'funded_year'").count`
         - json: 1250-1300ms (database), ruby: 4ms
 
-      ```
+      ```ruby
       NativeJson.select(:text).map do |r|
         r.text['funding_rounds'].map do |fr|
           fr['funded_year']
@@ -262,12 +262,12 @@
 
       # Hide the details in `scope`
       Sum across a field:
-      ```
+      ```ruby
       scope :amount_sum, ->{ self.sum("(transfer->>'amount')::int") }
       ```
 
       Convert Unix timestamp to Postgres timestamp
-      ```
+      ```ruby
       scope :paid_in_month, ->(year){
         self.where("DATE_PART('year',
           TIMESTAMP 'epoch' + (transfer->>'date')::int * INTERVAL '1 second') = ?", year)
