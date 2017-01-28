@@ -1,0 +1,245 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <title>Presentation</title>
+    <meta charset="utf-8">
+    <style>
+      @import url(https://fonts.googleapis.com/css?family=Yanone+Kaffeesatz);
+      @import url(https://fonts.googleapis.com/css?family=Droid+Serif:400,700,400italic);
+      @import url(https://fonts.googleapis.com/css?family=Ubuntu+Mono:400,700,400italic);
+
+      body { font-family: 'Droid Serif'; }
+      h1, h2, h3 {
+        font-family: 'Yanone Kaffeesatz';
+        font-weight: normal;
+      }
+      .remark-slide-content {
+        font-size: 24px;
+      }
+      .remark-slide-content li {
+        margin-top: 10px;
+        margin-bottom: 10px;
+      }
+      .remark-code, .remark-inline-code {
+        font-family: 'Ubuntu Mono';
+        padding: 2px 5px;
+        background-color: #e9e9e9;
+      }
+      img{
+        max-width: 100%;
+      }
+    </style>
+  </head>
+  <body>
+    <textarea id="source">
+
+      class: center, middle
+
+      # Using Native JSON in Postgres
+      ###### Adam Derewecki (derewecki@gmail.com)
+      ###### Presented 2/7/2017 for Snapdocs
+      ###### github.com/derwiki/presentation-jsonb
+      ![JSON Postgres](slide-json-giuseppe.jpg)
+
+      ---
+
+      # Introduction
+      - databases traditionally store structured data (typed columns)
+      - databases store semi-structured (XML, JSON) as a text field
+        - entire field must be retrieved and parsed in application
+        - field cannot be queried in database
+      - Postgres 9.4 introduces native JSON and JSONB
+
+      ---
+
+      # Field type: JSON
+      - stores exact copy of input text
+      - processing functions must reparse on each execution
+      - no parsing overhead on insert
+
+      ---
+
+      # Field type: JSONB
+      - stores decomposed binary format
+      - does not perserve white space, key order
+      - parsing overhead on insert
+      - processing functions do not have to reparse
+      - supports indexing
+
+      ---
+
+      # JSON vs JSONB
+      - 99% of the time you want JSONB
+      - legacy assumptions on key ordering could keep you on JSON
+
+      ---
+
+      # JSON primitives and Postgres types
+      - string <=> text
+      - number <=> numeric
+      - boolean <=> boolean
+      - null <=> none (SQL `NULL` is different)
+
+      ---
+
+      # Setting up
+      - `CREATE TABLE external_account_transfers transfer:jsonb`
+      - `ALTER TABLE external_account_transfers ADD COLUMN response:jsonb`
+
+      ---
+
+      # `INSERT` performance
+      - sample set: 18,801 JSON objects about startups 
+        - companies.zip from jsonstudio.com/resources
+      - sequential statements/commits (i.e. not batch)
+      - JSON: 7ms
+      - JSONB: 10ms
+      - serialized text: 10ms
+
+      ---
+      # JSON(B) Operators
+      ![Table 9-42](json-operators.jpg)
+
+      https://www.postgresql.org/docs/9.6/static/functions-json.html
+
+      ---
+      # Additional JSON(B) Operators
+      ![Table 9-43](additional-json-operators.jpg)
+
+      ---
+
+      # `WHERE` predicates
+      ```
+      NativeJson.where("(jsonb->>'number_of_employees')::numeric > 10").count
+      (297.5ms) SELECT COUNT(*) FROM "native_jsons"
+      WHERE ((jsonb->>'number_of_employees')::numeric > 10)
+      ```
+      - use `->>` to select as `text`, and then `::numeric` to convert
+
+      ```
+      NativeJson.where("(json->>'number_of_employees')::numeric > 10").count
+      (1252.9ms) SELECT COUNT(*) FROM "native_jsons"
+      WHERE ((json->>'number_of_employees')::numeric > 10)
+      ```
+      - JSON ~4x slower than JSONB
+
+      ```
+      NativeJson.select(:text).each.count {|nj| nj.text['number_of_employees'].to_i > 10}
+      (455.2ms)  SELECT "native_jsons"."text" FROM "native_jsons"
+      ```
+      - ~6000ms spent in Ruby, ~20x slower than serialized JSON
+
+
+      ---
+
+      # `SUM` numeric hash values
+      ```
+      NativeJson.sum("(jsonb->>'number_of_employees')::numeric")
+      (319.3ms)  SELECT SUM((jsonb->>'number_of_employees')::numeric) FROM "native_jsons"
+      ```
+      - `->>` get JSON object fields as `text`
+      - `(...)::numeric` to cast text as `numeric`
+      - negligible time spent in Ruby
+
+      ```
+      NativeJson.select(:text).map {|nj| nj.text['number_of_employees']}.compact.sum
+      (404.3ms)  SELECT "native_jsons"."text" FROM "native_jsons"
+      ```
+      - must retrieve entire `text` record and sum in Ruby
+      - time spent in Ruby: 7766ms
+
+      ---
+      # Indexing JSONB
+      ```
+      CREATE INDEX idx_native_jsons_jsonb_number_of_employee
+      ON native_jsons
+      USING GIN ((jsonb->'number_of_employees'));
+      ```
+      - GiN: Generalized Inverted Index
+        - required if indexing on JSON object (`->`)
+      - B-tree, Hash
+        - more "standard" index type
+        - can be used if attribute returned in text format (`->>`)
+      - using this 18k record table, the optimizer still preferred table scans
+
+      ---
+
+      # Working with nested arrays of hashes
+      - imagine:
+        - `jsonb: { funding_rounds: [{ year: 2000, .. }] }`
+      - won't work:
+        - `jsonb->'funding_rounds'->'year'`
+      - won't work:
+        - `jsonb#>'{funding_rounds, year}'`
+      - problem: no wildcard operator for the array index
+      - solution: `jsonb_array_elements`
+        - expands a JSON array to a set of JSON values
+        - returns SQL result set row per array element
+        - opposite of aggregation
+        - `jsonb_array_elements(jsonb->'funding_rounds')`
+      ---
+
+      # Working with nested arrays of hashes
+      Ruby:
+      ```
+      NativeJson.group("jsonb_array_elements(jsonb->'funding_rounds')->'funded_year'").count
+      ```
+
+      SQL:
+      ```
+      (395.2ms)
+      SELECT
+        COUNT(*) AS count_all, 
+        jsonb_array_elements(jsonb->'funding_rounds')->'funded_year
+          AS jsonb_array_elements_jsonb_funding_rounds_funded_year
+      FROM "native_jsons"
+      GROUP BY jsonb_array_elements(jsonb->'funding_rounds')->'funded_year'
+
+      {
+        2012 => 872,
+        1997 => 7,
+        2010 => 1314,
+        ...
+      }
+      ```
+
+      ---
+
+      # Performance
+      - `NativeJson.group("jsonb_array_elements(jsonb->'funding_rounds')->'funded_year'").count`
+        - jsonb: 300-400ms (database), ruby: 4ms
+      - `NativeJson.group("json_array_elements(json->'funding_rounds')->>'funded_year'").count`
+        - json: 1250-1300ms (database), ruby: 4ms
+
+      ```
+      NativeJson.select(:text).map do |r|
+        r.text['funding_rounds'].map do |fr|
+          fr['funded_year']
+        end
+      end.compact.flatten.inject(Hash.new(0)) { |h, x| h[x] += 1; h}
+      ```
+      - text: 400ms (database), ruby: 6100ms (deserializing+looping)
+
+      ---
+
+      # Hide the details in `scope`
+      Sum across a field:
+      ```
+      scope :amount_sum, ->{ self.sum("(transfer->>'amount')::int") }
+      ```
+
+      Conert Unix timestamp to Postgres timestamp
+      ```
+      scope :paid_in_month, ->(year){
+        self.where("DATE_PART('year',
+          TIMESTAMP 'epoch' + (transfer->>'date')::int * INTERVAL '1 second') = ?", year)
+      }
+      ```
+    </textarea>
+    <script src="https://remarkjs.com/downloads/remark-latest.min.js">
+    </script>
+    <script>
+      var slideshow = remark.create();
+    </script>
+  </body>
+</html>
