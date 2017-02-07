@@ -294,16 +294,17 @@
       - `belongs_to :user, foreign_key: "(json->>'user_id')::int"`
         - does not work
       - manual joins still possible:
-      ```
-      NativeJson
-        .joins("JOIN users ON (native_jsons.jsonb->>'user_id')::int = users.id")
-        .where('users.id > 40000')
+        ```
+        NativeJson
+          .joins("JOIN users ON (native_jsons.jsonb->>'user_id')::int = users.id")
+          .where('users.id > 40000')
+        ```
 
-      # 'fake' association
-      def user
-        User.find(self.jsonb['user_id'])
-      end
-      ```
+        ```
+        def user # 'fake' association
+          User.find(self.jsonb['user_id'])
+        end
+        ```
 
       ---
       # Advice
